@@ -1,0 +1,56 @@
+const jwt = require('jsonwebtoken');
+
+function extractToken(req){
+  // 1) Authorization Header (case-insensitive)
+  const h = req.headers?.authorization || req.headers?.Authorization;
+  if (h && typeof h === 'string') {
+    const m = h.match(/^Bearer\s+(.+)$/i);
+    if (m) return m[1].trim();
+  }
+  // 2) Query ?token=
+  if (req.query && typeof req.query.token === 'string' && req.query.token.length > 10) {
+    return req.query.token.trim();
+  }
+  // 3) Body { token | jwt | authToken }
+  const btok = req.body?.token || req.body?.jwt || req.body?.authToken;
+  if (btok && typeof btok === 'string') return btok.trim();
+  // 4) Cookie "token" (funktioniert nur, wenn cookie-parser aktiv ist)
+  if (req.cookies && typeof req.cookies.token === 'string') {
+    return req.cookies.token.trim();
+  }
+  return null;
+}
+
+// Standard-Auth: required = true
+function authz(required = true) {
+  return function (req, res, next) {
+    try {
+      const token = extractToken(req);
+      if (!token) {
+        if (required) return res.status(401).json({ error: 'unauth', reason: 'no_token' });
+        return next();
+      }
+      const secret = process.env.JWT_SECRET || 'change_me_please';
+      const payload = jwt.verify(token, secret);
+      // Normalisiere user-Daten
+      req.user = {
+        id: payload.id || payload.user_id || payload.uid || payload.sub,
+        role: payload.role || payload.r || 'kunde',
+        username: payload.username || payload.u || undefined,
+      };
+      if (!req.user.id && required) {
+        return res.status(401).json({ error: 'unauth', reason: 'invalid_payload' });
+      }
+      return next();
+    } catch (e) {
+      if (required) return res.status(401).json({ error: 'unauth', reason: 'token_verify_failed' });
+      return next();
+    }
+  }
+}
+
+// Bequemer Export
+module.exports = {
+  authzRequired: authz(true),
+  authzOptional: authz(false),
+};
