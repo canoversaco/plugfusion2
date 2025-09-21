@@ -1,0 +1,59 @@
+import React, { createContext, useContext, useEffect, useMemo, useReducer } from "react";
+
+const CartContext = createContext(null);
+const KEY = "plug.cart.v1";
+
+function read() {
+  try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; }
+}
+function write(items) {
+  localStorage.setItem(KEY, JSON.stringify(items));
+  try { window.dispatchEvent(new StorageEvent("storage", { key: KEY, newValue: JSON.stringify(items) })); } catch {}
+}
+function sum(items) { return items.reduce((a, x) => a + (x.price || 0) * (x.qty || 1), 0); }
+
+function reducer(state, action) {
+  switch (action.type) {
+    case "ADD": {
+      const { id, title, price, image, meta } = action.item;
+      const idx = state.findIndex(x => x.id === id);
+      const next = [...state];
+      if (idx >= 0) next[idx] = { ...next[idx], qty: (next[idx].qty || 1) + (action.qty || 1) };
+      else next.push({ id, title, price: Number(price || 0), qty: action.qty || 1, image, meta });
+      write(next); return next;
+    }
+    case "SET_QTY": {
+      const next = state.map(x => x.id === action.id ? { ...x, qty: Math.max(0, action.qty|0) } : x).filter(x => x.qty > 0);
+      write(next); return next;
+    }
+    case "REMOVE": {
+      const next = state.filter(x => x.id !== action.id); write(next); return next;
+    }
+    case "CLEAR": { write([]); return []; }
+    case "HYDRATE": return action.items;
+    default: return state;
+  }
+}
+
+export function CartProvider({ children }) {
+  const [items, dispatch] = useReducer(reducer, [], read);
+  useEffect(() => {
+    const onStorage = (e) => { if (e.key === KEY) dispatch({ type: "HYDRATE", items: read() }); };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const total = useMemo(() => sum(items), [items]);
+  const count = useMemo(() => items.reduce((a,x)=>a+(x.qty||1),0), [items]);
+
+  const api = useMemo(() => ({
+    items, total, count,
+    add: (item, qty=1) => dispatch({ type:"ADD", item, qty }),
+    setQty: (id, qty) => dispatch({ type:"SET_QTY", id, qty }),
+    remove: (id) => dispatch({ type:"REMOVE", id }),
+    clear: () => dispatch({ type:"CLEAR" }),
+    asOrderPayload: () => ({ items, total, count })
+  }), [items, total, count]);
+
+  return <CartContext.Provider value={api}>{children}</CartContext.Provider>;
+}
+export const useCart = () => useContext(CartContext);

@@ -1,0 +1,66 @@
+import React, { useState } from "react";
+
+const STATUS_MAP = {
+  "offen": "open",
+  "akzeptiert": "accepted",
+  "in arbeit": "in_progress",
+  "unterwegs": "en_route",
+  "abgeschlossen": "completed",
+  "open": "open",
+  "accepted": "accepted",
+  "in_progress": "in_progress",
+  "en_route": "en_route",
+  "completed": "completed"
+};
+const toServerStatus = (s) => STATUS_MAP[String(s || "").toLowerCase()] || s;
+
+async function tryJSON(url, method="GET", body) {
+  const res = await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) throw new Error(await res.text().catch(()=>res.statusText));
+  return res.json().catch(()=> ({}));
+}
+
+async function setOrderStatus(id, status, assignCourierId) {
+  status = toServerStatus(status);
+  const payload = { id, order_id: id, status, courier_id: assignCourierId };
+  const candidates = [
+    () => tryJSON(`/api/admin/orders/${id}/status`, "POST", payload),
+    () => tryJSON(`/api/orders/status`, "POST", payload),
+    () => tryJSON(`/api/orders/${id}/status`, "POST", payload),
+    () => tryJSON(`/api/admin/set-order-status`, "POST", payload),
+  ];
+  for (const run of candidates) { try { return await run(); } catch (e) {} }
+  throw new Error("Konnte Bestellstatus nicht setzen");
+}
+
+export default function AdminCoreTools() {
+  const [orderId, setOrderId] = useState("");
+  const [status, setStatus] = useState("accepted");
+  const [courier, setCourier] = useState("");
+  const [msg, setMsg] = useState("");
+
+  async function onApply() {
+    setMsg("");
+    try { await setOrderStatus(orderId, status, courier || undefined); setMsg("OK – Status aktualisiert."); }
+    catch (e) { setMsg(String(e.message || e)); }
+  }
+
+  return (
+    <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+      <div className="font-medium mb-2">Admin Tools</div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <input value={orderId} onChange={e=>setOrderId(e.target.value)} placeholder="Order-ID" className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm" />
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm">
+          <option value="accepted">akzeptiert</option>
+          <option value="in_progress">in arbeit</option>
+          <option value="en_route">unterwegs</option>
+          <option value="completed">abgeschlossen</option>
+          <option value="open">offen</option>
+        </select>
+        <input value={courier} onChange={e=>setCourier(e.target.value)} placeholder="Kurier-ID (optional)" className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm" />
+        <button onClick={onApply} className="px-3 py-1 rounded bg-violet-600 hover:bg-violet-500 text-sm">Setzen</button>
+      </div>
+      {msg && <div className="mt-2 text-xs text-zinc-300">{msg}</div>}
+    </div>
+  );
+}

@@ -1,0 +1,125 @@
+import React, { useEffect, useState } from "react";
+
+async function j(url, method="GET", body) {
+  const r = await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) throw new Error(await r.text().catch(()=>r.statusText));
+  try { return await r.json(); } catch { return {}; }
+}
+
+export default function AdminCoreTools() {
+  const [orderId, setOrderId] = useState("");
+  const [status, setStatus] = useState("accepted");
+  const [courier, setCourier] = useState("");
+
+  const [ui, setUi] = useState({ highlights: [], categoryFeatured: {} });
+  const [cats, setCats] = useState([]);
+  const [msg, setMsg] = useState("");
+
+  useEffect(()=>{ (async()=>{
+    try { const d = await j("/api/ui"); setUi(d); } catch {}
+    try { const cands=["/api/categories","/api/menu/categories","/api/catalog/categories","/api/admin/categories"]; for(const u of cands){ try { const d=await j(u); setCats(d.categories||d); break;}catch{}} } catch {}
+  })(); },[]);
+
+  async function saveUI(next) {
+    setMsg("");
+    try { const r = await j("/api/admin/ui","POST", next); setUi(r); setMsg("UI gespeichert."); } catch(e) { setMsg(String(e.message||e)); }
+  }
+
+  function toggleFeatured(cat) {
+    const id = cat.id || cat.category_id || cat.slug || cat.name;
+    const map = { ...(ui.categoryFeatured||{}) };
+    map[id] = !map[id];
+    saveUI({ ...ui, categoryFeatured: map });
+  }
+
+  function addHighlight() {
+    const title = prompt("Titel der Aktion:");
+    if (!title) return;
+    const href = prompt("Ziel-Link (optional):") || "#/menu";
+    const image = prompt("Bild-URL (optional):") || "";
+    const subtitle = prompt("Untertitel (optional):") || "";
+    saveUI({ ...ui, highlights: [...(ui.highlights||[]), { title, href, image, subtitle }] });
+  }
+
+  function removeHighlight(idx) {
+    const next = [...(ui.highlights||[])]; next.splice(idx,1);
+    saveUI({ ...ui, highlights: next });
+  }
+
+  // Order-Status Tool
+  async function setOrderStatus() {
+    setMsg("");
+    const payload = { id: orderId, order_id: orderId, status, courier_id: courier || undefined };
+    const tries = [
+      ()=>j(`/api/admin/orders/${orderId}/status`,"POST",payload),
+      ()=>j(`/api/orders/status`,"POST",payload),
+      ()=>j(`/api/orders/${orderId}/status`,"POST",payload),
+      ()=>j(`/api/admin/set-order-status`,"POST",payload),
+    ];
+    for (const t of tries) { try { await t(); setMsg("OK – Bestellstatus aktualisiert."); return; } catch{} }
+    setMsg("Konnte Bestellstatus nicht setzen.");
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+        <div className="font-medium mb-2">Bestell-Tools</div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <input value={orderId} onChange={e=>setOrderId(e.target.value)} placeholder="Order-ID" className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm" />
+          <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm">
+            <option value="accepted">akzeptiert</option>
+            <option value="in_progress">in arbeit</option>
+            <option value="en_route">unterwegs</option>
+            <option value="completed">abgeschlossen</option>
+            <option value="open">offen</option>
+          </select>
+          <input value={courier} onChange={e=>setCourier(e.target.value)} placeholder="Kurier-ID (optional)" className="px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-sm" />
+          <button onClick={setOrderStatus} className="px-3 py-1 rounded bg-violet-600 hover:bg-violet-500 text-sm">Setzen</button>
+        </div>
+      </div>
+
+      <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+        <div className="flex items-center mb-2">
+          <div className="font-medium">Kategorien hervorheben</div>
+          <button onClick={()=>location.reload()} className="ml-auto text-xs px-2 py-1 rounded bg-zinc-700">Neu laden</button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {cats.map(c=>{
+            const id = c.id || c.category_id || c.slug || c.name;
+            const active = !!(ui.categoryFeatured||{})[id];
+            return (
+              <button key={id} onClick={()=>toggleFeatured(c)}
+                className={"px-3 py-1.5 rounded-full border text-sm " + (active ? "bg-amber-700/30 border-amber-600/40 text-amber-200" : "bg-zinc-900 border-zinc-700 text-zinc-200")}>
+                {c.name || c.title || c.slug}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+        <div className="flex items-center mb-2">
+          <div className="font-medium">Highlights & Aktionen</div>
+          <button onClick={addHighlight} className="ml-auto text-xs px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600">+ Highlight</button>
+        </div>
+        {(ui.highlights||[]).length===0 ? (
+          <div className="text-zinc-400 text-sm">Keine Highlights vorhanden.</div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {(ui.highlights||[]).map((h,i)=>(
+              <div key={i} className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/60">
+                {h.image && <img src={h.image} className="w-full h-24 object-cover" />}
+                <div className="p-2">
+                  <div className="font-medium text-sm">{h.title}</div>
+                  <div className="text-xs text-zinc-400">{h.subtitle || h.href}</div>
+                </div>
+                <button onClick={()=>removeHighlight(i)} className="w-full text-xs py-1 bg-rose-700 hover:bg-rose-600">Entfernen</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {msg && <div className="mt-2 text-xs text-zinc-300">{msg}</div>}
+      </div>
+    </div>
+  );
+}
