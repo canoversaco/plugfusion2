@@ -1,0 +1,154 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+async function j(url, method="GET", body) {
+  const res = await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) throw new Error(await res.text().catch(()=>res.statusText));
+  try { return await res.json(); } catch { return {}; }
+}
+
+export default function ChatWindow({ roomId, onClose }) {
+  const [me, setMe] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState("verbunden…");
+  const wrapRef = useRef(null);
+  const esRef = useRef(null);
+  const pollRef = useRef(null);
+
+  const sseCandidates = useMemo(()=>[
+    `/api/chat/stream?room=${encodeURIComponent(roomId)}`,
+    `/api/chat/sse?room=${encodeURIComponent(roomId)}`,
+    `/api/sse/chat?room=${encodeURIComponent(roomId)}`
+  ], [roomId]);
+
+  function scrollBottom() {
+    const el = wrapRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  useEffect(() => {
+    (async () => {
+      const who = ["/api/me","/api/auth/me","/api/profile"];
+      for (const u of who) { try { setMe(await j(u)); break; } catch {} }
+    })();
+  }, []);
+
+  async function loadHistory() {
+    const tries = [
+      `/api/chat/history?room=${encodeURIComponent(roomId)}`,
+      `/api/chat?room=${encodeURIComponent(roomId)}`
+    ];
+    for (const u of tries) {
+      try {
+        const d = await j(u);
+        const list = d.messages || d.items || d.rows || [];
+        setMsgs(list);
+        return;
+      } catch {}
+    }
+    setMsgs([]);
+  }
+
+  // initial history
+  useEffect(() => {
+    loadHistory().then(scrollBottom).catch(()=>{});
+  }, [roomId]);
+
+  // SSE subscribe with fallback to polling
+  useEffect(() => {
+    let opened = false;
+    let connected = false;
+
+    (async () => {
+      for (const url of sseCandidates) {
+        try {
+          const es = new EventSource(url);
+          esRef.current = es;
+          es.addEventListener("open", () => { opened = true; connected = true; setStatus("live"); });
+          es.addEventListener("message", (ev) => {
+            try {
+              const d = JSON.parse(ev.data || "{}");
+              if (d.type === "chat" || d.text || d.message) {
+                setMsgs((prev) => {
+                  const next = [...prev, d.data || d];
+                  return next;
+                });
+                setTimeout(scrollBottom, 0);
+              }
+            } catch { /* ignore */ }
+          });
+          es.addEventListener("error", () => {
+            if (!opened) { es.close(); }
+          });
+          // wait briefly to see if it opens
+          await new Promise(r => setTimeout(r, 600));
+          if (opened) return; // keep this connection
+        } catch {}
+      }
+
+      // Fallback: polling
+      setStatus("polling");
+      pollRef.current = setInterval(loadHistory, 2500);
+    })();
+
+    return () => {
+      try { esRef.current && esRef.current.close(); } catch {}
+      esRef.current = null;
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    };
+  }, [roomId, sseCandidates.join("|")]);
+
+  async function onSend(e) {
+    e.preventDefault();
+    const payload = { room: roomId, text, user_id: me?.id || me?.user_id || undefined };
+    const tries = [
+      () => j("/api/chat/send", "POST", payload),
+      () => j("/api/chat/message", "POST", payload),
+    ];
+    let ok = false;
+    for (const t of tries) { try { await t(); ok = true; break; } catch {} }
+    if (!ok) return alert("Senden fehlgeschlagen");
+    setText("");
+    // optimistisch anzeigen, falls SSE Verzögerung
+    setMsgs(prev => [...prev, {
+      id: `tmp-${Date.now()}`, room: roomId, user_id: payload.user_id,
+      text, created_at: new Date().toISOString(), author: me?.name || me?.username || "Ich"
+    }]);
+    setTimeout(scrollBottom, 0);
+  }
+
+  const myId = me?.id || me?.user_id || null;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 p-2 border-b border-zinc-800 bg-zinc-900">
+        <div className="font-medium">Chat – {roomId}</div>
+        <div className="text-xs text-zinc-400">• {status}</div>
+        <button onClick={onClose} className="ml-auto text-xs px-2 py-1 rounded bg-zinc-700 hover:bg-zinc-600">Schließen</button>
+      </div>
+
+      <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-zinc-950">
+        {msgs.map(m => {
+          const mine = (m.user_id || m.author_id) == myId || /ich|me/i.test(m.author||"");
+          return (
+            <div key={m.id || m.ts} className={"max-w-[80%] rounded-2xl px-3 py-2 " + (mine ? "ml-auto bg-violet-600 text-white" : "bg-zinc-800 text-zinc-100")}>
+              <div className="text-xs opacity-80">{m.author || (mine ? "Ich" : "Kurier/Kunde")}</div>
+              <div className="whitespace-pre-wrap">{m.text || m.message}</div>
+              <div className="text-[10px] opacity-60 mt-1">{new Date(m.created_at || m.ts || Date.now()).toLocaleTimeString()}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <form onSubmit={onSend} className="p-2 border-t border-zinc-800 bg-zinc-900 flex gap-2">
+        <input
+          value={text}
+          onChange={e=>setText(e.target.value)}
+          placeholder="Nachricht schreiben…"
+          className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-xl text-sm"
+        />
+        <button className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 text-sm">Senden</button>
+      </form>
+    </div>
+  );
+}

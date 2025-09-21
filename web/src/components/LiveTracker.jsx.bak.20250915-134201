@@ -1,0 +1,36 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+export default function LiveTracker({ orderId, courierId, canPublish=false, onTrackingState=()=>{} }) {
+  const [eta, setEta] = useState(null), [status, setStatus] = useState(null), [last, setLast] = useState(null);
+  const [hasFix, setHasFix] = useState(false), [coords, setCoords] = useState(null), esRef = useRef(null), watchRef = useRef(null);
+  const [via, setVia] = useState(null);
+
+  const sse = useMemo(()=>[
+    `/api/orders/${orderId}/sse`, `/api/sse/orders/${orderId}`, `/api/orders-live/${orderId}/sse`,
+    `/api/orders-live/sse?id=${encodeURIComponent(orderId)}`, `/api/orders/${orderId}/live`
+  ], [orderId]);
+
+  const posts = useMemo(()=>[
+    (b)=>fetch(`/api/orders/${orderId}/location`,{method:"POST",headers:{"Content-Type":"application/json"},body:b}),
+    (b)=>fetch(`/api/orders/${orderId}/loc`,{method:"POST",headers:{"Content-Type":"application/json"},body:b}),
+    (b)=>fetch(`/api/courier/${courierId||"me"}/orders/${orderId}/location`,{method:"POST",headers:{"Content-Type":"application/json"},body:b}),
+    (b)=>fetch(`/api/orders-live/${orderId}/location`,{method:"POST",headers:{"Content-Type":"application/json"},body:b}),
+    (b)=>fetch(`/api/live/orders/${orderId}/location`,{method:"POST",headers:{"Content-Type":"application/json"},body:b}),
+  ], [orderId, courierId]);
+
+  async function postAny(json){ const body=JSON.stringify(json); for(const f of posts){ try{const r=await f(body); if(r.ok)return true;}catch{}} return false; }
+
+  useEffect(()=>{ if(!orderId) return; (async ()=>{ for(const u of sse){ try{ const es=new EventSource(u); let opened=false;
+    es.addEventListener("open",()=>{opened=true; setVia(u);});
+    es.addEventListener("message",(ev)=>{ try{ const d=JSON.parse(ev.data||"{}"); if(d.eta!==undefined) setEta(d.eta); if(d.status!==undefined) setStatus(d.status);
+      if(d.coords||(d.lat&&d.lng)){ const c=d.coords||{lat:d.lat,lng:d.lng,heading:d.heading,speed:d.speed}; setCoords(c); setLast(Date.now()); setHasFix(true);} onTrackingState({eta:d.eta??eta,status:d.status??status,coords:d.coords??coords}); }catch{} });
+    es.addEventListener("error",()=>{ if(!opened) es.close(); });
+    await new Promise(r=>setTimeout(r,750)); if(opened){ esRef.current=es; return; } }catch{} } })(); return ()=>{ try{esRef.current?.close();}catch{} esRef.current=null; }; },[orderId]);
+  useEffect(()=>{ if(!canPublish||!orderId) return; if(!("geolocation" in navigator)) return; const onPos=(p)=>{ const {latitude,longitude,heading,speed}=p.coords||{}; setHasFix(true); setCoords({lat:latitude,lng:longitude,heading,speed}); setLast(Date.now()); postAny({lat:latitude,lng:longitude,heading,speed,ts:Date.now()}); };
+    const onErr=(e)=>console.warn("geo err",e); const id=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:5000,timeout:15000}); watchRef.current=id; return ()=>{ try{navigator.geolocation.clearWatch(watchRef.current);}catch{} watchRef.current=null; }; },[canPublish,orderId]);
+
+  return <div className="rounded-xl p-3 bg-zinc-900/60 border border-zinc-800">
+    <div className="flex items-center gap-2 text-sm text-zinc-300 mb-2"><span className="inline-block w-2 h-2 rounded-full" style={{background:hasFix?"#34d399":"#a1a1aa"}}></span><span>Live-Tracking</span>{via && <span className="ml-auto text-xs opacity-60">SSE: {via}</span>}</div>
+    <div className="text-xs text-zinc-400 mb-2">ETA: {eta!=null?`${eta} min`:"—"} • Status: {status||"—"} • {last?`zuletzt: ${new Date(last).toLocaleTimeString()}`:"warte auf Daten…"}</div>
+    <div className="w-full h-1.5 bg-zinc-800 rounded"><div className="h-1.5 rounded" style={{width:eta?`${Math.max(0,Math.min(100,100-eta))}%`:"2%",background:"#7c3aed"}}></div></div>
+  </div>;
+}

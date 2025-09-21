@@ -1,0 +1,57 @@
+import React, { useEffect, useMemo, useState } from "react";
+import ProductCard from "./ProductCard.jsx";
+
+async function j(u){ const r=await fetch(u); if(!r.ok) throw new Error(await r.text().catch(()=>r.statusText)); return r.json(); }
+
+export default function MenuOverlay(){
+  const [show,setShow]=useState(false);
+  const [cats,setCats]=useState([]); const [active,setActive]=useState(null);
+  const [prods,setProds]=useState([]); const [ui,setUi]=useState({categoryFeatured:{}});
+  // nur anzeigen, wenn kein Grid vorhanden ist (DOM-Heuristik)
+  useEffect(()=> {
+    const hasGrid = !!document.querySelector('.product-card, [data-product-card], [data-menu-grid], .menu-grid');
+    setShow(!hasGrid);
+    const obs = new MutationObserver(()=> {
+      const now = !!document.querySelector('.product-card, [data-product-card], [data-menu-grid], .menu-grid');
+      setShow(!now);
+    });
+    obs.observe(document.body, { childList:true, subtree:true });
+    return ()=>obs.disconnect();
+  },[]);
+  async function fetchCats() {
+    const list = ["/api/categories","/api/menu/categories","/api/catalog/categories","/api/admin/categories"];
+    for (const u of list) { try { const d=await j(u); return d.categories||d; } catch{} }
+    return [];
+  }
+  async function fetchProds(id) {
+    const list = [`/api/menu/products?category=${encodeURIComponent(id)}`, `/api/products?category=${encodeURIComponent(id)}`, `/api/catalog/products?category=${encodeURIComponent(id)}`];
+    for (const u of list) { try { const d=await j(u); return d.products||d; } catch{} }
+    return [];
+  }
+  useEffect(()=>{ (async()=>{
+    try{ const U=await j("/api/ui"); setUi(U); }catch{}
+    const C = await fetchCats();
+    const norm=(C||[]).map(c=>({ id:c.id||c.category_id||c.slug||c.name, name:c.name||c.title||c.slug }));
+    norm.sort((a,b)=>((ui.categoryFeatured?.[b.id]?1:0)-(ui.categoryFeatured?.[a.id]?1:0))||String(a.name).localeCompare(String(b.name)));
+    setCats(norm); setActive(norm[0]?.id||null);
+  })(); },[]);
+  useEffect(()=>{ if(!active) return; (async()=>setProds(await fetchProds(active)))(); },[active]);
+  if (!show) return null;
+
+  return (
+    <div className="max-w-5xl mx-auto px-3 py-4" data-menu-overlay>
+      <div className="sticky top-0 z-20 bg-zinc-950/70 backdrop-blur border-b border-zinc-800/60 -mx-3 px-3 py-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {cats.map(c=>{
+            const feat = !!(ui.categoryFeatured||{})[c.id];
+            const activeCl = c.id===active ? "bg-violet-600 border-violet-500 text-white" : (feat ? "bg-amber-700/30 border-amber-600/40 text-amber-200" : "bg-zinc-900 border-zinc-700 text-zinc-200");
+            return <button key={c.id} onClick={()=>setActive(c.id)} className={"px-3 py-1.5 rounded-full border text-sm "+activeCl} data-category-pill>{c.name}</button>;
+          })}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3" data-menu-grid>
+        {prods.map(p=> <div key={p.id||p.product_id} className="product-card" data-product-card><ProductCard product={p} /></div>)}
+      </div>
+    </div>
+  );
+}

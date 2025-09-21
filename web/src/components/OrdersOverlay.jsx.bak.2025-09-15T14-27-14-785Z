@@ -1,0 +1,54 @@
+import React, { useEffect, useState } from "react";
+
+async function j(u){ const r=await fetch(u); if(!r.ok) throw new Error(await r.text().catch(()=>r.statusText)); return r.json(); }
+function normItems(o){
+  const cands=[o.items,o.lines,o.cart,(()=>{try{return JSON.parse(o.cart_json||o.items_json||o.lines_json||"{}").items}catch(_){return null}})()];
+  const arr=(cands.find(Boolean))||[];
+  return arr.map(x=>({ id:x.id||x.product_id, title:x.title||x.name, qty:x.qty||x.quantity||1, price:Number(x.price??x.unit_price??0) }));
+}
+
+export default function OrdersOverlay(){
+  const [show,setShow]=useState(false);
+  const [orders,setOrders]=useState([]);
+  useEffect(()=> {
+    const has = !!document.querySelector('[data-order-item], .order-card, [data-orders-list]');
+    setShow(!has);
+    const obs=new MutationObserver(()=>{ const now=!!document.querySelector('[data-order-item], .order-card, [data-orders-list]'); setShow(!now); });
+    obs.observe(document.body,{childList:true,subtree:true});
+    return ()=>obs.disconnect();
+  },[]);
+  useEffect(()=>{ if(!show) return;
+    (async()=>{
+      const endpoints=["/api/my/orders","/api/orders?scope=me","/api/orders"];
+      for(const u of endpoints){ try{ const d=await j(u); setOrders(d.orders||d||[]); return; }catch{} }
+      setOrders([]);
+    })();
+  },[show]);
+  if(!show) return null;
+
+  return (
+    <div className="max-w-3xl mx-auto px-3 py-4" data-orders-list>
+      <h2 className="text-lg font-semibold mb-2">Meine Bestellungen</h2>
+      {orders.length===0 ? <div className="text-zinc-400">Noch keine Bestellungen.</div> : (
+        <div className="space-y-3">
+          {orders.map(o=>{
+            const items=normItems(o);
+            return (
+              <div key={o.id||o.order_id} className="order-card p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="font-medium">#{o.id||o.order_id}</div>
+                  <div className="text-xs text-zinc-500">• {o.status||"—"}</div>
+                </div>
+                {items.length===0 ? <div className="text-zinc-400 text-sm">Keine Positionen gefunden.</div> : (
+                  <ul className="list-disc pl-5 space-y-1 text-sm">
+                    {items.map(it=><li key={it.id} data-order-item>{it.qty}× {it.title} · {(it.price*it.qty).toFixed(2)} €</li>)}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

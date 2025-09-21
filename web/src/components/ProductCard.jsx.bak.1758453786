@@ -1,0 +1,12 @@
+import React from "react"; import { useCart } from "../cart/CartContext.jsx";
+export default function ProductCard({product}){ const cart=useCart(); const price=Number(product.price ?? product.unit_price ?? product.cost ?? 0);
+  return (<div className="rounded-2xl p-3 bg-zinc-900/60 border border-zinc-800 flex flex-col">
+    {product.image && <img src={product.image} alt={product.title||product.name} className="w-full h-36 object-cover rounded-xl mb-2" />}
+    <div className="font-medium">{product.title||product.name}</div>
+    <div className="text-sm text-zinc-400 mb-2">{product.subtitle||product.desc||""}</div>
+    <div className="mt-auto flex items-center gap-2">
+      <div className="text-lg font-semibold">{price.toFixed(2)} €</div>
+      <button onClick={()=>cart.add({id:product.id||product.product_id,title:product.title||product.name,price,image:product.image})} className="ml-auto px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-sm">In den Warenkorb</button>
+    </div>
+  </div>);
+}

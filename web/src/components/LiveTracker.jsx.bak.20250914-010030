@@ -1,0 +1,98 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+export default function LiveTracker({ orderId, courierId, canPublish = false, onTrackingState = () => {} }) {
+  const [eta, setEta] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [last, setLast] = useState(null);
+  const [hasFix, setHasFix] = useState(false);
+  const [coords, setCoords] = useState(null);
+  const esRef = useRef(null);
+  const watchRef = useRef(null);
+  const [connectedVia, setConnectedVia] = useState(null);
+
+  const sseCandidates = useMemo(() => [
+    `/api/orders/${orderId}/sse`,
+    `/api/sse/orders/${orderId}`,
+    `/api/orders-live/${orderId}/sse`,
+    `/api/orders-live/sse?id=${encodeURIComponent(orderId)}`,
+    `/api/orders/${orderId}/live`
+  ].filter(Boolean), [orderId]);
+
+  const postCandidates = useMemo(() => [
+    (body) => fetch(`/api/orders/${orderId}/location`, { method: "POST", headers: { "Content-Type": "application/json" }, body }),
+    (body) => fetch(`/api/orders/${orderId}/loc`, { method: "POST", headers: { "Content-Type": "application/json" }, body }),
+    (body) => fetch(`/api/courier/${courierId || "me"}/orders/${orderId}/location`, { method: "POST", headers: { "Content-Type": "application/json" }, body }),
+    (body) => fetch(`/api/orders-live/${orderId}/location`, { method: "POST", headers: { "Content-Type": "application/json" }, body }),
+    (body) => fetch(`/api/live/orders/${orderId}/location`, { method: "POST", headers: { "Content-Type": "application/json" }, body })
+  ], [orderId, courierId]);
+
+  async function tryPostToAny(json) {
+    const body = JSON.stringify(json);
+    let lastErr = null;
+    for (const fn of postCandidates) {
+      try { const res = await fn(body); if (res.ok) return true; lastErr = new Error(`${res.status} ${res.statusText}`); }
+      catch (e) { lastErr = e; }
+    }
+    console.warn("[LiveTracker] All POST candidates failed", lastErr);
+    return false;
+  }
+
+  useEffect(() => {
+    if (!orderId) return;
+    (async () => {
+      for (const url of sseCandidates) {
+        try {
+          const es = new EventSource(url);
+          let opened = false;
+          es.addEventListener("open", () => { opened = true; setConnectedVia(url); });
+          es.addEventListener("message", (ev) => {
+            try {
+              const d = JSON.parse(ev.data || "{}");
+              if (d.eta !== undefined) setEta(d.eta);
+              if (d.status !== undefined) setStatus(d.status);
+              if (d.coords || (d.lat && d.lng)) {
+                const c = d.coords || { lat: d.lat, lng: d.lng, heading: d.heading, speed: d.speed };
+                setCoords(c); setLast(Date.now()); setHasFix(true);
+              }
+              onTrackingState({ eta: d.eta ?? eta, status: d.status ?? status, coords: d.coords ?? coords });
+            } catch {}
+          });
+          es.addEventListener("error", () => { if (!opened) es.close(); });
+          await new Promise(r => setTimeout(r, 750));
+          if (opened) { esRef.current = es; return; }
+        } catch {}
+      }
+    })();
+    return () => { try { esRef.current?.close(); } catch {} esRef.current = null; };
+  }, [orderId, sseCandidates]);
+
+  useEffect(() => {
+    if (!canPublish || !orderId) return;
+    if (!("geolocation" in navigator)) { console.warn("[LiveTracker] Geolocation API not available"); return; }
+    const onPos = (pos) => {
+      const { latitude, longitude, heading, speed } = pos.coords || {};
+      setHasFix(true); setCoords({ lat: latitude, lng: longitude, heading, speed }); setLast(Date.now());
+      tryPostToAny({ lat: latitude, lng: longitude, heading, speed, ts: Date.now() });
+    };
+    const onErr = (e) => console.warn("[LiveTracker] geolocation error", e);
+    const id = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+    watchRef.current = id;
+    return () => { try { navigator.geolocation.clearWatch(watchRef.current); } catch {} watchRef.current = null; };
+  }, [canPublish, orderId]);
+
+  return (
+    <div className="rounded-xl p-3 bg-zinc-900/60 border border-zinc-800">
+      <div className="flex items-center gap-2 text-sm text-zinc-300 mb-2">
+        <span className="inline-block w-2 h-2 rounded-full" style={{ background: hasFix ? "#34d399" : "#a1a1aa" }}></span>
+        <span>Live-Tracking</span>
+        {connectedVia && <span className="ml-auto text-xs opacity-60">SSE: {connectedVia}</span>}
+      </div>
+      <div className="text-xs text-zinc-400 mb-2">
+        ETA: {eta != null ? `${eta} min` : "—"} • Status: {status || "—"} • {last ? `zuletzt: ${new Date(last).toLocaleTimeString()}` : "warte auf Tracking-Daten…"}
+      </div>
+      <div className="w-full h-1.5 bg-zinc-800 rounded">
+        <div className="h-1.5 rounded" style={{ width: eta ? `${Math.max(0, Math.min(100, 100 - eta))}%` : "2%", background: "#7c3aed" }}></div>
+      </div>
+    </div>
+  );
+}

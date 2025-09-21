@@ -1,0 +1,17 @@
+import React from "react";
+import { useCart } from "../cart/CartContext.jsx";
+
+export default function StickyCheckoutBar(){
+  const cart = useCart?.() || { count:0, total:0 };
+  const count = cart.count || 0, total = Number(cart.total||0);
+  return (
+    <div className="fixed bottom-3 left-1/2 -translate-x-1/2 w-[min(680px,92vw)] z-30">
+      <div className={"transition-all " + (count>0 ? "opacity-100 translate-y-0" : "opacity-0 pointer-events-none translate-y-2")}>
+        <a href="#/checkout" className="flex items-center justify-between rounded-2xl px-4 py-3 bg-emerald-600 hover:bg-emerald-500 border border-emerald-400 shadow-lg">
+          <div className="font-semibold">Zur Kasse</div>
+          <div className="text-sm bg-emerald-900/40 rounded-full px-2 py-0.5">{count} · {total.toFixed(2)} €</div>
+        </a>
+      </div>
+    </div>
+  );
+}
